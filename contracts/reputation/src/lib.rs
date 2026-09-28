@@ -165,6 +165,15 @@ pub enum ReputationError {
     /// mirroring the cap pattern used for `MAX_ENDORSERS_COUNTED`,
     /// `MAX_REVIEWS_COUNTED`, and `MAX_REVIEWS_PER_REVIEWEE_WINDOW` (issue #1177).
     TooManyStakeTiers = 30,
+    /// No multi-sig proposal exists for the requested `proposal_id`.
+    ///
+    /// Returned by the *lookup* paths in `approve_admin_action` and
+    /// `execute_proposal` when no proposal is stored under that id. These used to
+    /// report `NotAdmin`, which told a legitimately-authorized signer that they
+    /// were an unauthorized admin rather than that they passed a stale or
+    /// mistyped proposal id (issue #1434). Genuine authorization checks are
+    /// unaffected and still return `NotAdmin`.
+    ProposalNotFound = 31,
 }
 
 #[contracttype]
@@ -350,7 +359,6 @@ enum DataKey {
     Reviews(Address),
     ReviewExists(Address, Address, u64),
     Badges(Address),
-    Admin, // Legacy
     DecayRate,
     // Configurable upper bound for `DecayRate`, settable by a super-admin up to
     // `MAX_DECAY_RATE_HARD_CEILING`. Falls back to `MAX_DECAY_RATE` when unset.
@@ -497,6 +505,19 @@ const MAX_REVIEWS_PER_REVIEWEE_WINDOW: u32 = 20;
 // `get_average_rating`, `get_score_badge`, and leaderboard updates), so an unbounded
 // list would make those calls progressively more expensive (issue #1177).
 const MAX_STAKE_TIERS: u32 = 10;
+
+/// Maximum number of users returned in a single leaderboard page query.
+/// Prevents unbounded iteration costs and keeps response sizes manageable.
+const LEADERBOARD_PAGE_SIZE_CAP: u32 = 50;
+
+/// Reputation score change applied when a user wins a dispute.
+const DISPUTE_OUTCOME_WON_SCORE: i64 = 50;
+
+/// Reputation score change applied when a user loses a dispute.
+const DISPUTE_OUTCOME_LOST_SCORE: i64 = -100;
+
+/// Reputation score change applied when a user is found to have filed a dispute in bad faith.
+const DISPUTE_OUTCOME_MALICIOUS_FILING_SCORE: i64 = -250;
 
 fn bump_reputation_ttl(env: &Env, user: &Address) {
     env.storage().persistent().extend_ttl(
@@ -1112,9 +1133,15 @@ impl ReputationContract {
                 (referrer.clone(), earned_score, user.clone()),
             );
 
+            // The descriptive `referral_reward` event must carry the same payload as
+            // the legacy `ref_rwrd` event above. It previously omitted `user` (the
+            // referee whose activity triggered the payout), so an indexer that
+            // migrated from the legacy topic could no longer tell *which* referred
+            // account earned the referrer their bonus (issue #1433). Keep the two
+            // tuples field-for-field identical.
             env.events().publish(
                 (symbol_short!("reput"), Symbol::new(env, "referral_reward")),
-                (referrer, earned_score),
+                (referrer, earned_score, user),
             );
         }
     }
@@ -1502,9 +1529,9 @@ impl ReputationContract {
         dispute_contract.require_auth();
 
         let score_change: i64 = match outcome {
-            DisputeOutcome::Won => 50,
-            DisputeOutcome::Lost => -100,
-            DisputeOutcome::MaliciousFiling => -250,
+            DisputeOutcome::Won => DISPUTE_OUTCOME_WON_SCORE,
+            DisputeOutcome::Lost => DISPUTE_OUTCOME_LOST_SCORE,
+            DisputeOutcome::MaliciousFiling => DISPUTE_OUTCOME_MALICIOUS_FILING_SCORE,
         };
 
         let rep_key = DataKey::Reputation(user.clone());
@@ -1565,6 +1592,15 @@ impl ReputationContract {
             .instance()
             .get(&DataKey::MinStakeWeight)
             .unwrap_or(MIN_STAKE_WEIGHT)
+    }
+
+    /// Get the current decay rate configuration (percentage per year).
+    /// Returns 0 if no decay rate has been configured.
+    pub fn get_decay_rate(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DecayRate)
+            .unwrap_or(0)
     }
 
     /// Set the minimum stake weight threshold (admin/signer only).
@@ -1692,11 +1728,13 @@ impl ReputationContract {
             return Err(ReputationError::NotAdmin);
         }
 
+        // Lookup failure, not an authorization failure: the caller has already
+        // cleared the `is_signer` check above (issue #1434).
         let mut proposal: MultiSigProposal = env
             .storage()
             .instance()
             .get(&DataKey::MultiSigProposal(proposal_id))
-            .ok_or(ReputationError::NotAdmin)?;
+            .ok_or(ReputationError::ProposalNotFound)?;
 
         if proposal.executed {
             return Err(ReputationError::Unauthorized);
@@ -1729,11 +1767,14 @@ impl ReputationContract {
     }
 
     fn execute_proposal(env: &Env, proposal_id: u64) -> Result<(), ReputationError> {
+        // Lookup failure, not an authorization failure: this is an internal
+        // helper reached only after the caller has cleared a signer check
+        // (issue #1434).
         let mut proposal: MultiSigProposal = env
             .storage()
             .instance()
             .get(&DataKey::MultiSigProposal(proposal_id))
-            .ok_or(ReputationError::NotAdmin)?;
+            .ok_or(ReputationError::ProposalNotFound)?;
 
         if proposal.executed {
             return Err(ReputationError::Unauthorized);
@@ -2391,7 +2432,7 @@ impl ReputationContract {
             return Vec::new(&env);
         }
 
-        let actual_limit = if limit > 50 { 50 } else { limit };
+        let actual_limit = if limit > LEADERBOARD_PAGE_SIZE_CAP { LEADERBOARD_PAGE_SIZE_CAP } else { limit };
         let end = offset.saturating_add(actual_limit);
         let end = if end > total { total } else { end };
 
@@ -2406,7 +2447,7 @@ impl ReputationContract {
     /// tuples sorted by rating (highest first), up to top 50.
     /// Deprecated: use get_leaderboard_page instead.
     pub fn get_leaderboard(env: Env) -> Vec<(Address, u64)> {
-        Self::get_leaderboard_page(env, 0, 50)
+        Self::get_leaderboard_page(env, 0, LEADERBOARD_PAGE_SIZE_CAP)
     }
 
     /// Internal function to update the leaderboard after a review is submitted.

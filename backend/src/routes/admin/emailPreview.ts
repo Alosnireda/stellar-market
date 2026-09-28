@@ -29,7 +29,11 @@ router.get("/:template", (req: Request, res: Response) => {
   try {
     const rawVars = req.query.vars;
     if (rawVars && typeof rawVars === "string") {
-      vars = JSON.parse(rawVars);
+      const parsed = JSON.parse(rawVars);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return res.status(400).json({ error: "Invalid vars JSON" });
+      }
+      vars = parsed;
     }
   } catch {
     return res.status(400).json({ error: "Invalid vars JSON" });

@@ -29,6 +29,7 @@ export const getUsersAdminQuerySchema = paginationSchema.extend({
 });
 
 export const getJobsAdminQuerySchema = paginationSchema.extend({
+  limit: z.coerce.number().int().positive().min(1).max(100).default(20),
   includeDeleted: z
     .string()
     .transform((val) => val === "true")
@@ -56,6 +57,11 @@ export const getAuditLogsQuerySchema = paginationSchema.extend({
 export const queryPendingDisputesSchema = paginationSchema;
 
 export const queryFlaggedUsersSchema = paginationSchema;
+
+export const getReportsAdminQuerySchema = paginationSchema.extend({
+  status: z.string().optional(),
+  targetType: z.string().optional(),
+});
 
 export type FlagJobInput = z.infer<typeof flagJobSchema>;
 export type SuspendUserInput = z.infer<typeof suspendUserSchema>;
