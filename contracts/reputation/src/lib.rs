@@ -1124,9 +1124,15 @@ impl ReputationContract {
                 (referrer.clone(), earned_score, user.clone()),
             );
 
+            // The descriptive `referral_reward` event must carry the same payload as
+            // the legacy `ref_rwrd` event above. It previously omitted `user` (the
+            // referee whose activity triggered the payout), so an indexer that
+            // migrated from the legacy topic could no longer tell *which* referred
+            // account earned the referrer their bonus (issue #1433). Keep the two
+            // tuples field-for-field identical.
             env.events().publish(
                 (symbol_short!("reput"), Symbol::new(env, "referral_reward")),
-                (referrer, earned_score),
+                (referrer, earned_score, user),
             );
         }
     }

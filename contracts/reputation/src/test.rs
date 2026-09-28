@@ -4863,3 +4863,116 @@ fn test_effective_weight_agrees_with_get_decayed_totals() {
     assert_eq!(effective as u64, client.get_reputation(&reviewee).total_weight);
     assert_eq!(effective, review.stake_weight / 2);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1433 — `referral_reward` must carry the referee its legacy sibling carries
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Decode the first `reput`/`topic` event in the log into `T`.
+///
+/// Mirrors the ad-hoc decoding already used by the `tiers_set` and `tier_up`
+/// tests: event data is a serialized Rust value, so it round-trips back through
+/// `TryFromVal` when the test knows the published type.
+fn decode_reput_event<T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>(
+    env: &Env,
+    topic: Symbol,
+) -> Option<T> {
+    env.events()
+        .all()
+        .iter()
+        .find(|(_, topics, _)| topics_match(env, topics, symbol_short!("reput"), topic.clone()))
+        .and_then(|(_, _, data)| T::try_from_val(env, &data).ok())
+}
+
+#[test]
+fn test_referral_reward_event_carries_referee() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin], &1u32, &0u32);
+
+    let referrer = Address::generate(&env);
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = create_token(&env, &token_admin);
+    mint(&env, &token_addr, &token_admin, &job_client, 100_000_000);
+
+    client.register_referral(&freelancer, &referrer);
+    setup_completed_job(&env, &escrow_id, 1u64, &job_client, &freelancer, &token_addr);
+    client.submit_review(
+        &escrow_id,
+        &job_client,
+        &freelancer,
+        &1u64,
+        &5u32,
+        &String::from_str(&env, "Good job"),
+        &MIN_STAKE,
+    );
+
+    // The descriptive `referral_reward` event must expose the same three fields
+    // as the legacy `ref_rwrd` event, including the referee whose activity
+    // triggered the payout. Dropping `user` left indexers that migrated to this
+    // topic unable to attribute the bonus to a referee.
+    let legacy: (Address, u64, Address) =
+        decode_reput_event(&env, symbol_short!("ref_rwrd")).expect("legacy ref_rwrd event");
+    let descriptive: (Address, u64, Address) =
+        decode_reput_event(&env, Symbol::new(&env, "referral_reward")).expect("referral_reward event");
+
+    assert_eq!(legacy, (referrer.clone(), 5u64, freelancer.clone()));
+    assert_eq!(descriptive, legacy);
+}
+
+#[test]
+fn test_referral_reward_event_absent_when_no_referrer() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin], &1u32, &0u32);
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = create_token(&env, &token_admin);
+    mint(&env, &token_addr, &token_admin, &job_client, 100_000_000);
+
+    // No referral registered, so `process_referral_bonus` is a no-op and neither
+    // event is published. Guards against a padded/empty event sneaking in.
+    setup_completed_job(&env, &escrow_id, 1u64, &job_client, &freelancer, &token_addr);
+    client.submit_review(
+        &escrow_id,
+        &job_client,
+        &freelancer,
+        &1u64,
+        &5u32,
+        &String::from_str(&env, "Good job"),
+        &MIN_STAKE,
+    );
+
+    assert!(decode_referral_reward_count(&env) == 0);
+}
+
+fn decode_referral_reward_count(env: &Env) -> usize {
+    env.events()
+        .all()
+        .iter()
+        .filter(|(_, topics, _)| {
+            topics_match(
+                env,
+                topics,
+                symbol_short!("reput"),
+                Symbol::new(env, "referral_reward"),
+            )
+        })
+        .count()
+}
