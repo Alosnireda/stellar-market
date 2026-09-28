@@ -57,6 +57,11 @@ export const queryPendingDisputesSchema = paginationSchema;
 
 export const queryFlaggedUsersSchema = paginationSchema;
 
+export const getReportsAdminQuerySchema = paginationSchema.extend({
+  status: z.string().optional(),
+  targetType: z.string().optional(),
+});
+
 export type FlagJobInput = z.infer<typeof flagJobSchema>;
 export type SuspendUserInput = z.infer<typeof suspendUserSchema>;
 export type GetUsersAdminQuery = z.infer<typeof getUsersAdminQuerySchema>;
