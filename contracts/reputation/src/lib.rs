@@ -165,6 +165,15 @@ pub enum ReputationError {
     /// mirroring the cap pattern used for `MAX_ENDORSERS_COUNTED`,
     /// `MAX_REVIEWS_COUNTED`, and `MAX_REVIEWS_PER_REVIEWEE_WINDOW` (issue #1177).
     TooManyStakeTiers = 30,
+    /// No multi-sig proposal exists for the requested `proposal_id`.
+    ///
+    /// Returned by the *lookup* paths in `approve_admin_action` and
+    /// `execute_proposal` when no proposal is stored under that id. These used to
+    /// report `NotAdmin`, which told a legitimately-authorized signer that they
+    /// were an unauthorized admin rather than that they passed a stale or
+    /// mistyped proposal id (issue #1434). Genuine authorization checks are
+    /// unaffected and still return `NotAdmin`.
+    ProposalNotFound = 31,
 }
 
 #[contracttype]
@@ -1719,11 +1728,13 @@ impl ReputationContract {
             return Err(ReputationError::NotAdmin);
         }
 
+        // Lookup failure, not an authorization failure: the caller has already
+        // cleared the `is_signer` check above (issue #1434).
         let mut proposal: MultiSigProposal = env
             .storage()
             .instance()
             .get(&DataKey::MultiSigProposal(proposal_id))
-            .ok_or(ReputationError::NotAdmin)?;
+            .ok_or(ReputationError::ProposalNotFound)?;
 
         if proposal.executed {
             return Err(ReputationError::Unauthorized);
@@ -1756,11 +1767,14 @@ impl ReputationContract {
     }
 
     fn execute_proposal(env: &Env, proposal_id: u64) -> Result<(), ReputationError> {
+        // Lookup failure, not an authorization failure: this is an internal
+        // helper reached only after the caller has cleared a signer check
+        // (issue #1434).
         let mut proposal: MultiSigProposal = env
             .storage()
             .instance()
             .get(&DataKey::MultiSigProposal(proposal_id))
-            .ok_or(ReputationError::NotAdmin)?;
+            .ok_or(ReputationError::ProposalNotFound)?;
 
         if proposal.executed {
             return Err(ReputationError::Unauthorized);

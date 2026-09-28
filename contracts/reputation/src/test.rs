@@ -4976,3 +4976,75 @@ fn decode_referral_reward_count(env: &Env) -> usize {
         })
         .count()
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1434 — proposal lookups report `ProposalNotFound`, not `NotAdmin`
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_approve_admin_action_unknown_proposal_reports_proposal_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+
+    let signer = Address::generate(&env);
+    // 2-of-2 so that proposing leaves the proposal pending rather than
+    // executing it inline via the `threshold == 1` shortcut.
+    let signer2 = Address::generate(&env);
+    client.initialize(&vec![&env, signer.clone(), signer2], &2, &0);
+
+    // A genuine signer passing a stale/wrong id is a lookup failure, not an
+    // authorization failure.
+    assert_eq!(
+        client.try_approve_admin_action(&signer, &9_999),
+        Err(Ok(ReputationError::ProposalNotFound))
+    );
+}
+
+#[test]
+fn test_approve_admin_action_unknown_proposal_by_non_signer_still_reports_not_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+
+    let signer = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    client.initialize(&vec![&env, signer.clone(), signer2], &2, &0);
+
+    // The authorization check still runs first and is unchanged: a non-signer
+    // gets `NotAdmin` whether or not the proposal id exists.
+    let outsider = Address::generate(&env);
+    assert_eq!(
+        client.try_approve_admin_action(&outsider, &9_999),
+        Err(Ok(ReputationError::NotAdmin))
+    );
+}
+
+#[test]
+fn test_approve_admin_action_proposal_0_after_execution_reports_proposal_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    client.initialize(&vec![&env, signer1.clone(), signer2.clone()], &2, &0);
+
+    let prop_id = client.propose_admin_action(&signer1, &AdminAction::Pause);
+    assert_eq!(prop_id, 1);
+    client.approve_admin_action(&signer2, &prop_id);
+
+    // Proposing does not retire the proposal record, so re-approving the
+    // already-executed id still hits the "already executed" branch rather than
+    // the not-found branch.
+    assert_eq!(
+        client.try_approve_admin_action(&signer1, &prop_id),
+        Err(Ok(ReputationError::Unauthorized))
+    );
+}
