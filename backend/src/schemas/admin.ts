@@ -29,6 +29,7 @@ export const getUsersAdminQuerySchema = paginationSchema.extend({
 });
 
 export const getJobsAdminQuerySchema = paginationSchema.extend({
+  limit: z.coerce.number().int().positive().min(1).max(100).default(20),
   includeDeleted: z
     .string()
     .transform((val) => val === "true")
