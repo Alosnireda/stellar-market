@@ -11,6 +11,7 @@ import {
   queryPendingDisputesSchema,
   queryFlaggedUsersSchema,
   getAuditLogsQuerySchema,
+  getReportsAdminQuerySchema,
   GetJobsAdminQuery,
 } from "../schemas/admin";
 import { z, ZodError } from "zod";
@@ -54,7 +55,7 @@ router.post(
   requireAdmin,
   validate({
     body: z.object({
-      cursor: z.string().min(1, "Cursor is required"),
+      cursor: z.string().min(1, "Cursor is required").max(256),
     }),
   }),
   async (req: AuthRequest, res: Response): Promise<void> => {
@@ -1083,16 +1084,17 @@ const REPORT_STATUSES = ["PENDING", "REVIEWED", "DISMISSED"] as const;
  */
 router.get(
   "/reports",
+  validate({ query: getReportsAdminQuerySchema }),
   async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-      const page = Math.max(1, parseInt(req.query.page as string) || 1);
-      const limit = Math.min(100, parseInt(req.query.limit as string) || 20);
+      const query = getReportsAdminQuerySchema.parse(req.query);
+      const { page, limit, status, targetType } = query;
       const skip = (page - 1) * limit;
 
       const where: Prisma.ReportWhereInput = {};
-      if (req.query.status) where.status = req.query.status as Prisma.ReportWhereInput["status"];
-      if (req.query.targetType)
-        where.targetType = req.query.targetType as Prisma.ReportWhereInput["targetType"];
+      if (status) where.status = status as Prisma.ReportWhereInput["status"];
+      if (targetType)
+        where.targetType = targetType as Prisma.ReportWhereInput["targetType"];
 
       const [reports, total] = await Promise.all([
         prisma.report.findMany({

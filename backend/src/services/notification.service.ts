@@ -40,6 +40,7 @@ export class NotificationService {
     "DISPUTE_RAISED",
     "DISPUTE_RESOLVED",
     "NEW_MESSAGE",
+    "PAYMENT_RELEASED",
   ];
 
   /**
