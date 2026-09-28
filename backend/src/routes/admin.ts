@@ -438,12 +438,8 @@ router.get(
   validate({ query: getJobsAdminQuerySchema }),
   async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 20;
-      // getJobsAdminQuerySchema transforms includeDeleted to a boolean
-      const includeDeleted =
-        (req.query as unknown as GetJobsAdminQuery).includeDeleted === true ||
-        req.query.includeDeleted === "true";
+      const query = req.query as unknown as GetJobsAdminQuery;
+      const { page, limit, includeDeleted } = query;
       const skip = (page - 1) * limit;
 
       const where: Prisma.JobWhereInput = {};
